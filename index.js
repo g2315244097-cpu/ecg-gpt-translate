@@ -153,8 +153,104 @@ export function apply(ctx) {
     return parts.map((part, index) => index + 1 + '. ' + part).join('\n');
   }
 
-  /** Fallback: a keyless public translation endpoint. */
-  async function translateWithMyMemory(text) {
+  /** Findings an ECG-GPT report is built from; longest first so a prefix never wins. */
+  const FINDINGS = [
+    'SUPRAVENTRICULAR TACHYCARDIA',
+    'VENTRICULAR TACHYCARDIA',
+    'ATRIAL FIBRILLATION',
+    'ATRIAL FLUTTER',
+    'SINUS TACHYCARDIA',
+    'SINUS BRADYCARDIA',
+    'SINUS RHYTHM',
+    'SINUS ARRHYTHMIA',
+    'LEFT ANTERIOR FASCICULAR BLOCK',
+    'LEFT POSTERIOR FASCICULAR BLOCK',
+    'LEFT BUNDLE BRANCH BLOCK',
+    'RIGHT BUNDLE BRANCH BLOCK',
+    'FIRST DEGREE AV BLOCK',
+    'SECOND DEGREE AV BLOCK',
+    'THIRD DEGREE AV BLOCK',
+    'LEFT VENTRICULAR HYPERTROPHY',
+    'RIGHT VENTRICULAR HYPERTROPHY',
+    'LEFT ATRIAL ENLARGEMENT',
+    'RIGHT ATRIAL ENLARGEMENT',
+    'LEFT AXIS DEVIATION',
+    'RIGHT AXIS DEVIATION',
+    'ANTERIOR INFARCTION',
+    'INFERIOR INFARCTION',
+    'LATERAL INFARCTION',
+    'ST-T ABNORMALITIES',
+    'ST ELEVATION',
+    'ST DEPRESSION',
+    'T WAVE INVERSION',
+    'PROLONGED QTC',
+    'PROLONGED QT',
+    'SHORT QT',
+    'NORMAL AXIS',
+    'ABNORMAL ECG',
+    'NORMAL ECG',
+  ].sort((left, right) => right.length - left.length);
+
+  const FINDING_RE = new RegExp(
+    '(' + FINDINGS.map((item) => item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')',
+    'g',
+  );
+
+  function splitFindings(text) {
+    const upper = text.toUpperCase();
+    const parts = upper.split(FINDING_RE);
+    if (parts.length <= 1) return [];
+    const findings = [];
+    let buffer = '';
+    for (const part of parts) {
+      const token = part.trim();
+      if (FINDINGS.includes(token)) {
+        if (buffer.trim() !== '') findings.push(buffer.trim());
+        buffer = token;
+      } else {
+        buffer += ' ' + part;
+      }
+    }
+    if (buffer.trim() !== '') findings.push(buffer.trim());
+    return findings
+      .map((item) => item.replace(/\s+/g, ' ').trim())
+      .filter((item) => item.length > 2);
+  }
+
+  const SEVERITY = [
+    [1, ['ST ELEVATION', 'VENTRICULAR TACHYCARDIA', 'THIRD DEGREE AV BLOCK', 'SECOND DEGREE AV BLOCK']],
+    [
+      2,
+      [
+        'ST DEPRESSION',
+        'ISCHEMIA',
+        'INFARCTION',
+        'HYPERTROPHY',
+        'BUNDLE BRANCH BLOCK',
+        'FASCICULAR BLOCK',
+        'ATRIAL FIBRILLATION',
+        'ATRIAL FLUTTER',
+        'AXIS DEVIATION',
+        'ENLARGEMENT',
+        'PROLONGED QTC',
+        'SUPRAVENTRICULAR TACHYCARDIA',
+        'TACHYCARDIA',
+      ],
+    ],
+    [3, ['ST-T ABNORMALITIES', 'T WAVE INVERSION', 'PROLONGED QT', 'ABNORMAL ECG']],
+    [4, ['SINUS RHYTHM', 'NORMAL AXIS', 'NORMAL ECG']],
+  ];
+
+  function severityOf(finding) {
+    const upper = finding.toUpperCase();
+    for (const [rank, words] of SEVERITY) {
+      if (words.some((word) => upper.includes(word))) return rank;
+    }
+    return 3;
+  }
+
+  /** Fallback: a keyless public translation endpoint, raw text. */
+  async function translateWithMyMemoryRaw(text) {
     const url =
       'https://api.mymemory.translated.net/get?q=' +
       encodeURIComponent(text.slice(0, 4500)) +
@@ -166,23 +262,61 @@ export function apply(ctx) {
     if (typeof translated !== 'string') return null;
     const trimmed = translated.trim();
     if (trimmed === '' || /MYMEMORY WARNING/i.test(trimmed)) return null;
-    return formatSentences(trimmed);
+    return trimmed;
+  }
+
+  async function translateWithMyMemory(text) {
+    const raw = await translateWithMyMemoryRaw(text);
+    return raw === null ? null : formatSentences(raw);
+  }
+
+  /**
+   * Deterministic fallback: split the run-on English report into findings, rank them
+   * by clinical severity, translate each, and emit one numbered line per finding.
+   * Used when the model route is unavailable.
+   */
+  async function translateStructured(text) {
+    const findings = splitFindings(text);
+    if (findings.length < 2) return null;
+    const ranked = findings
+      .map((finding, index) => ({ finding, index, rank: severityOf(finding) }))
+      .sort((left, right) => left.rank - right.rank || left.index - right.index);
+    const lines = [];
+    for (let index = 0; index < ranked.length; index += 1) {
+      const item = ranked[index];
+      let chinese = null;
+      try {
+        chinese = await translateWithMyMemoryRaw(item.finding);
+      } catch (_ignored) {
+        chinese = null;
+      }
+      lines.push(index + 1 + '. ' + (chinese || item.finding));
+    }
+    return lines.join('\n');
   }
 
   async function translate(text) {
+    let llmError = null;
     try {
       const viaLlm = await translateWithLlm(text);
-      if (viaLlm) return { text: viaLlm, via: 'llm' };
+      if (viaLlm) return { text: viaLlm, via: 'llm', llmError: null };
     } catch (error) {
+      llmError = error instanceof Error ? error.message : String(error);
       ctx.logger.warn('ecg-gpt-translate: LLM translation failed', error);
     }
     try {
+      const structured = await translateStructured(text);
+      if (structured) return { text: structured, via: 'mymemory-structured', llmError };
+    } catch (error) {
+      ctx.logger.warn('ecg-gpt-translate: structured fallback failed', error);
+    }
+    try {
       const viaPublic = await translateWithMyMemory(text);
-      if (viaPublic) return { text: viaPublic, via: 'mymemory' };
+      if (viaPublic) return { text: viaPublic, via: 'mymemory', llmError };
     } catch (error) {
       ctx.logger.warn('ecg-gpt-translate: public translation failed', error);
     }
-    return { text: null, via: null };
+    return { text: null, via: null, llmError };
   }
 
   ctx.effect(
@@ -243,12 +377,13 @@ export function apply(ctx) {
               return;
             }
 
-            const { text: translated, via } = await translate(prediction);
+            const { text: translated, via, llmError } = await translate(prediction);
             sendJson(res, 200, {
               ok: true,
               original: prediction,
               translated,
               translatedVia: via,
+              llmError,
             });
           } catch (error) {
             sendJson(res, 200, {
@@ -282,8 +417,8 @@ export function apply(ctx) {
               sendJson(res, 413, { ok: false, error: '文本过长（上限 20000 字符）' });
               return;
             }
-            const { text: translated, via } = await translate(text);
-            sendJson(res, 200, { ok: true, translated, translatedVia: via });
+            const { text: translated, via, llmError } = await translate(text);
+            sendJson(res, 200, { ok: true, translated, translatedVia: via, llmError });
           } catch (error) {
             sendJson(res, 200, {
               ok: false,
