@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "ECG-GPT Translator",
+    "description": "Upload a 12-lead ECG image, fetch the ECG-GPT interpretation, and read it translated into Chinese."
+  }
+}

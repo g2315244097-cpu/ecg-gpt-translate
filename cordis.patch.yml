@@ -1,0 +1,3 @@
+- insert:
+    - id: ecg-gpt-translate
+      name: '@ppppeter/ecg-gpt-translate'

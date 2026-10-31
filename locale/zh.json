@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "ECG-GPT 心电图翻译",
+    "description": "上传 12 导联心电图照片，自动抓取 ECG-GPT 的分析结果并翻译成中文。"
+  }
+}
