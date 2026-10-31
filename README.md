@@ -17,23 +17,32 @@
 
 ## 安装
 
+### 最快的方式（GitHub）
+
+在 Harness 对话里让 agent 执行：
+
+> `plugin_manager` → `install_bundle` → `target` = **`github:g2315244097-cpu/ecg-gpt-translate`**
+
+也可以直接给完整地址：
+
+```
+git+https://github.com/g2315244097-cpu/ecg-gpt-translate.git
+```
+
+安装后插件默认启用。**宿主代码更新后需要完全退出并重开 Harness**
+（未开启 `pnpm run dev:web` 时插件 JS 不会热加载）。
+
+### 其他安装形式
+
 插件遵循 DSH 的 bundle 规范（`package.json` 的 `dsh.bundle.patch` + `dsh.client`）。
-通过 Harness 的插件管理安装即可：
-
-- Web：侧边栏 **Plugins** 页面
-- 对话：让 agent 调用 `plugin_manager` 的 `install_bundle`，`target` 填下面的 spec
-
-可用的 `target` 形式：
+也可以从 Web 侧边栏 **Plugins** 页面安装，`target` 支持：
 
 | 形式 | 示例 |
 |---|---|
-| npm 注册表包 | `ecg-gpt-translate` 或 `@you/ecg-gpt-translate` |
-| Git 仓库 | `github:you/ecg-gpt-translate` |
-| 本地目录 | `D:\\path\\to\\ecg-gpt-translate`（或 `link:`） |
+| GitHub 仓库 | `github:g2315244097-cpu/ecg-gpt-translate` |
+| Git 地址 | `git+https://github.com/g2315244097-cpu/ecg-gpt-translate.git` |
+| 本地目录 | `D:\path\to\ecg-gpt-translate` |
 | tarball | `ecg-gpt-translate-1.0.0.tgz` 的路径或 URL |
-
-安装后插件默认启用；若宿主代码有更新，需要**完全退出并重开 Harness**
-（未开启 `pnpm run dev:web` 时插件 JS 不会热加载）。
 
 ## 已知限制：Turnstile 域名白名单
 
